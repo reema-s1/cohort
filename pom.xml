@@ -83,6 +83,10 @@
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-failsafe-plugin</artifactId>
                     <version>3.5.2</version>
+                    <configuration>
+                        <!-- Test against classes, not the Spring Boot repackaged jar. -->
+                        <classesDirectory>${project.build.outputDirectory}</classesDirectory>
+                    </configuration>
                     <executions>
                         <execution>
                             <goals>

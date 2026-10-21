@@ -1,0 +1,34 @@
+spring:
+  application:
+    name: cohort-server
+  datasource:
+    url: ${COHORT_DB_URL:jdbc:postgresql://localhost:5432/cohort}
+    username: ${COHORT_DB_USER:cohort}
+    password: ${COHORT_DB_PASSWORD:cohort}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  threads:
+    virtual:
+      enabled: true
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
+
+server:
+  shutdown: graceful
+
+cohort:
+  security:
+    admin-key: ${COHORT_ADMIN_KEY:dev-admin-key}
+    sdk-key: ${COHORT_SDK_KEY:dev-sdk-key}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
