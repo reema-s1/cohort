@@ -204,8 +204,8 @@ class CohortClientTest {
             for (int i = 0; i < 1200; i++) {
                 cohort.getVariant("new-search-ranking", CohortUser.of("user_" + i));
             }
-            await(() -> server.events().size() == 1200);
-            assertThat(cohort.stats().eventsSent()).isEqualTo(1200);
+            // The fake server records a batch before the SDK counts it as sent, so wait for both.
+            await(() -> server.events().size() == 1200 && cohort.stats().eventsSent() == 1200);
             assertThat(cohort.stats().eventsDropped()).isZero();
         }
     }
