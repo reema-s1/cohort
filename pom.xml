@@ -15,6 +15,7 @@
         <module>cohort-common</module>
         <module>cohort-server</module>
         <module>cohort-sdk</module>
+        <module>cohort-simulator</module>
     </modules>
 
     <properties>
