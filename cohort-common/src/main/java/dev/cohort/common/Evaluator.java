@@ -2,7 +2,7 @@ package dev.cohort.common;
 
 import dev.cohort.common.Evaluation.Reason;
 
-import java.util.Collection;
+import java.util.Set;
 
 /**
  * Pure flag evaluation: a hash and a loop, no I/O. Used by both the SDK and the server's
@@ -57,15 +57,8 @@ public final class Evaluator {
         };
     }
 
-    private static boolean contains(Object list, String value) {
-        if (!(list instanceof Collection<?> values)) {
-            return false;
-        }
-        for (Object candidate : values) {
-            if (value.equals(String.valueOf(candidate))) {
-                return true;
-            }
-        }
-        return false;
+    private static boolean contains(Object values, String value) {
+        // Rule normalises list conditions to a Set<String> at construction.
+        return values instanceof Set<?> set && set.contains(value);
     }
 }
