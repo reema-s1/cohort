@@ -1,0 +1,8 @@
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: cohort-server
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["cohort-server:8080"]

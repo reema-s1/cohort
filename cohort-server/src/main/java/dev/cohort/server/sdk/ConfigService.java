@@ -10,6 +10,8 @@ import dev.cohort.server.flag.ConfigVersionRepository;
 import dev.cohort.server.flag.FlagChangedEvent;
 import dev.cohort.server.flag.FlagEntity;
 import dev.cohort.server.flag.FlagRepository;
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -46,7 +48,7 @@ public class ConfigService {
     private final LoadingCache<String, Snapshot> cache;
 
     public ConfigService(FlagRepository flags, ConfigVersionRepository configVersion, ObjectMapper mapper,
-                         PlatformTransactionManager transactions) {
+                         PlatformTransactionManager transactions, MeterRegistry registry) {
         this.flags = flags;
         this.configVersion = configVersion;
         this.mapper = mapper;
@@ -59,6 +61,9 @@ public class ConfigService {
                 .maximumSize(1)
                 .expireAfterWrite(Duration.ofSeconds(30))
                 .build(key -> load());
+        Gauge.builder("cohort.config.version", this, service -> service.current().version())
+                .description("Global flag config version served to SDKs")
+                .register(registry);
     }
 
     public Snapshot current() {

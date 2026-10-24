@@ -2,6 +2,8 @@ package dev.cohort.server.events;
 
 import dev.cohort.common.CohortEvent;
 import dev.cohort.common.EventBatch;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
@@ -27,10 +29,12 @@ public class EventController {
 
     private final KafkaTemplate<String, CohortEvent> kafka;
     private final EventProperties properties;
+    private final Counter ingested;
 
-    public EventController(KafkaTemplate<String, CohortEvent> kafka, EventProperties properties) {
+    public EventController(KafkaTemplate<String, CohortEvent> kafka, EventProperties properties, MeterRegistry registry) {
         this.kafka = kafka;
         this.properties = properties;
+        this.ingested = Counter.builder("cohort.events.ingested").description("Events accepted and written to Kafka").register(registry);
     }
 
     @PostMapping("/events")
@@ -65,6 +69,7 @@ public class EventController {
         } catch (Exception e) {
             return problem(HttpStatus.SERVICE_UNAVAILABLE, "event log unavailable; retry later");
         }
+        ingested.increment(batch.events().size());
         return ResponseEntity.accepted().body(Map.of("accepted", batch.events().size()));
     }
 
