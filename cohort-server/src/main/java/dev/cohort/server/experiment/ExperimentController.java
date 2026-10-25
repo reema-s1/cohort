@@ -32,10 +32,14 @@ public class ExperimentController {
     /**
      * @param liftVsControl relative change in conversion rate against control, e.g. 0.1 for +10%
      * @param pValue        two-proportion z-test against control; null for control itself or when
-     *                      there is not enough data
+     *                      there is not enough data. Only valid if read once, at a sample size fixed
+     *                      in advance.
+     * @param sequentialPValue always-valid p-value ({@link SequentialTest}); safe to check at any
+     *                      time and stop as soon as it is below 0.05
      */
     public record VariantResult(String variant, long exposures, long conversions, double conversionRate,
-                                Double liftVsControl, Double zScore, Double pValue, boolean significant) {
+                                Double liftVsControl, Double zScore, Double pValue, boolean significant,
+                                Double sequentialPValue, boolean sequentialSignificant) {
     }
 
     public record ExperimentResults(String flagKey, String control, long totalExposures, List<VariantResult> variants) {
@@ -64,15 +68,18 @@ public class ExperimentController {
             long[] c = counts.getOrDefault(variant, new long[2]);
             total += c[0];
             if (variant.equals(controlVariant)) {
-                results.add(new VariantResult(variant, c[0], c[1], rate(c), null, null, null, false));
+                results.add(new VariantResult(variant, c[0], c[1], rate(c), null, null, null, false, null, false));
                 continue;
             }
             TwoProportionZTest.Result test = TwoProportionZTest.test(controlCounts[1], controlCounts[0], c[1], c[0]);
+            Double sequential = SequentialTest.pValue(controlCounts[1], controlCounts[0], c[1], c[0]);
             Double lift = controlRate > 0 ? rate(c) / controlRate - 1 : null;
             results.add(new VariantResult(variant, c[0], c[1], rate(c), lift,
                     test == null ? null : test.z(),
                     test == null ? null : test.pValue(),
-                    test != null && test.pValue() < SIGNIFICANCE));
+                    test != null && test.pValue() < SIGNIFICANCE,
+                    sequential,
+                    sequential != null && sequential < SIGNIFICANCE));
         }
         return new ExperimentResults(key, controlVariant, total, results);
     }

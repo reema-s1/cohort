@@ -73,17 +73,23 @@ public final class Simulator {
         Thread.sleep(3000);
         JsonNode results = get(server + "/api/v1/experiments/" + flag + "/results", adminKey);
         System.out.println();
-        System.out.printf("%-12s %12s %12s %10s %10s %12s%n", "variant", "exposures", "conversions", "rate", "lift", "p-value");
+        System.out.printf("%-12s %12s %12s %10s %10s %12s %12s%n",
+                "variant", "exposures", "conversions", "rate", "lift", "p-value", "seq. p");
         for (JsonNode v : results.get("variants")) {
-            System.out.printf("%-12s %,12d %,12d %9.2f%% %10s %12s%n",
+            System.out.printf("%-12s %,12d %,12d %9.2f%% %10s %12s %12s%n",
                     v.get("variant").asText(),
                     v.get("exposures").asLong(),
                     v.get("conversions").asLong(),
                     v.get("conversionRate").asDouble() * 100,
                     v.get("liftVsControl").isNull() ? "-" : String.format("%+.1f%%", v.get("liftVsControl").asDouble() * 100),
-                    v.get("pValue").isNull() ? "-" : String.format("%.2e", v.get("pValue").asDouble()));
+                    pValue(v.get("pValue")),
+                    pValue(v.get("sequentialPValue")));
         }
         System.out.println("(cumulative across runs; results lag ingestion by a few seconds)");
+    }
+
+    private static String pValue(JsonNode p) {
+        return p == null || p.isNull() ? "-" : String.format("%.2e", p.asDouble());
     }
 
     private static void ensureFlag(String server, String adminKey, String flag) throws Exception {

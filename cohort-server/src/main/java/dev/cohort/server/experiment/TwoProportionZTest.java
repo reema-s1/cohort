@@ -6,7 +6,7 @@ package dev.cohort.server.experiment;
  *   z = (p_t - p_c) / sqrt(p (1 - p) (1/n_t + 1/n_c))
  * </pre>
  * Deliberately simple. It assumes a fixed sample size decided up front; peeking at it repeatedly
- * inflates false positives, which is what sequential testing would fix.
+ * inflates false positives. {@link SequentialTest} gives a p-value that is safe to peek at.
  */
 public final class TwoProportionZTest {
 
