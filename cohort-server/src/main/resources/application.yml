@@ -30,6 +30,10 @@ spring:
         spring.json.use.type.headers: false
     listener:
       type: batch
+      # One consumer per partition. Events are keyed by flag and user, so a user's events still
+      # land on one consumer in order; stats upserts take row locks in key order, so consumers
+      # cannot deadlock on them.
+      concurrency: ${COHORT_AGGREGATOR_CONSUMERS:6}
       # Offsets are committed only after the listener returns, i.e. after the DB transaction commits.
       ack-mode: batch
   threads:
