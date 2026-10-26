@@ -168,6 +168,13 @@ class FlagApiIT {
     }
 
     @Test
+    void theAdminConsoleIsServedWithoutAKey() {
+        ResponseEntity<String> page = http.getForEntity("/", String.class);
+        assertThat(page.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(page.getBody()).contains("<title>Cohort</title>");
+    }
+
+    @Test
     void requestsWithoutTheAdminKeyAreRejected() {
         assertThat(http.getForEntity("/api/v1/flags", String.class).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
         HttpHeaders sdkOnly = new HttpHeaders();

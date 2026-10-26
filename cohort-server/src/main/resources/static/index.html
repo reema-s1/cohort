@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cohort</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #fff; --text: #1d1d1b; --muted: #6b6b66; --line: #e2e2dd;
+    --accent: #2f5bd3; --danger: #c0392b; --ok: #1e8a4c; --warn: #b7791f;
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #161615; --panel: #1f1f1d; --text: #ecece8; --muted: #9a9a93; --line: #33332f; --accent: #7a9cff; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); }
+  header { display: flex; gap: 12px; align-items: center; padding: 12px 20px; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+  header h1 { font-size: 16px; margin: 0 auto 0 0; }
+  main { display: grid; grid-template-columns: minmax(260px, 340px) 1fr; gap: 16px; padding: 16px 20px; }
+  @media (max-width: 800px) { main { grid-template-columns: 1fr; padding: 12px 16px; } }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; min-width: 0; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 10px; }
+  h3 { font-size: 15px; margin: 18px 0 8px; }
+  input, textarea, button { font: inherit; color: inherit; }
+  input, textarea { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+  textarea { width: 100%; min-height: 260px; font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; }
+  button { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+  button.secondary { background: transparent; color: var(--text); border: 1px solid var(--line); }
+  button.danger { background: var(--danger); }
+  button:disabled { opacity: .5; cursor: default; }
+  .flags { list-style: none; margin: 0; padding: 0; }
+  .flags li { padding: 8px; border-radius: 6px; cursor: pointer; display: flex; justify-content: space-between; gap: 8px; }
+  .flags li:hover, .flags li.selected { background: var(--bg); }
+  .flags .key { font-family: ui-monospace, Consolas, monospace; overflow: hidden; text-overflow: ellipsis; }
+  .badge { font-size: 11px; padding: 1px 7px; border-radius: 10px; border: 1px solid currentColor; white-space: nowrap; }
+  .on { color: var(--ok); } .killed { color: var(--danger); } .archived { color: var(--muted); }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .table-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 500; }
+  .sig { color: var(--ok); font-weight: 600; }
+  .muted { color: var(--muted); }
+  .error { color: var(--danger); white-space: pre-wrap; }
+  .audit { list-style: none; padding: 0; margin: 0; }
+  .audit li { padding: 6px 0; border-bottom: 1px solid var(--line); }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Cohort</h1>
+  <label class="row">Admin key <input id="key" type="password" autocomplete="off" placeholder="X-API-Key"></label>
+  <label class="row">Actor <input id="actor" placeholder="you@example.com"></label>
+  <button id="connect">Connect</button>
+</header>
+<main>
+  <section>
+    <div class="row" style="justify-content: space-between">
+      <h2>Flags</h2>
+      <label class="row muted"><input id="archived" type="checkbox"> archived</label>
+    </div>
+    <ul id="flags" class="flags"></ul>
+    <p id="empty" class="muted">Enter the admin key to load flags.</p>
+    <button id="new" class="secondary" disabled>New flag</button>
+  </section>
+
+  <section id="detail" class="hidden">
+    <div class="row" style="justify-content: space-between">
+      <h2 id="title"></h2>
+      <div class="row">
+        <button id="save">Save</button>
+        <button id="kill" class="danger">Kill switch</button>
+        <button id="archive" class="secondary">Archive</button>
+      </div>
+    </div>
+    <p id="message" class="error"></p>
+    <textarea id="editor" spellcheck="false"></textarea>
+
+    <div id="results-block">
+      <h3>Results</h3>
+      <div class="table-wrap"><table id="results"></table></div>
+      <p class="muted">Sequential p-values stay valid however often you check; the fixed p-value only
+        holds if you read it once, at a sample size chosen in advance.</p>
+      <h3>Audit log</h3>
+      <ul id="audit" class="audit"></ul>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const store = {
+  get: k => { try { return sessionStorage.getItem(k) || ''; } catch { return ''; } },
+  set: (k, v) => { try { sessionStorage.setItem(k, v); } catch { /* private mode */ } },
+};
+let selected = null; // flag key being edited, or '' for a new one
+
+const TEMPLATE = {
+  key: 'my-experiment',
+  description: '',
+  defaultVariant: 'control',
+  variants: [{ name: 'control', weight: 5000 }, { name: 'treatment', weight: 5000 }],
+  rules: [{ priority: 1, type: 'PERCENT', condition: { basisPoints: 10000 }, variant: null }],
+  layer: null,
+};
+
+async function api(method, path, body) {
+  const headers = { 'X-API-Key': $('key').value };
+  if ($('actor').value) headers['X-Actor'] = $('actor').value;
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  const response = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+  const data = response.status === 204 ? null : await response.json().catch(() => null);
+  if (!response.ok) {
+    const errors = data && data.errors ? '\n' + data.errors.join('\n') : '';
+    throw new Error(((data && data.detail) || response.status + ' ' + response.statusText) + errors);
+  }
+  return data;
+}
+
+function status(flag) {
+  if (flag.archived) return ['archived', 'archived'];
+  return flag.enabled ? ['on', 'on'] : ['killed', 'killed'];
+}
+
+async function loadFlags() {
+  store.set('cohort.key', $('key').value);
+  store.set('cohort.actor', $('actor').value);
+  const list = $('flags');
+  try {
+    const flags = await api('GET', '/api/v1/flags?includeArchived=' + $('archived').checked);
+    list.replaceChildren(...flags.map(flag => {
+      const li = document.createElement('li');
+      li.className = flag.key === selected ? 'selected' : '';
+      const key = document.createElement('span');
+      key.className = 'key';
+      key.textContent = flag.key;
+      const [label, cls] = status(flag);
+      const badge = document.createElement('span');
+      badge.className = 'badge ' + cls;
+      badge.textContent = label;
+      li.append(key, badge);
+      li.onclick = () => openFlag(flag.key);
+      return li;
+    }));
+    $('empty').textContent = flags.length ? '' : 'No flags yet.';
+    $('new').disabled = false;
+  } catch (e) {
+    list.replaceChildren();
+    $('empty').textContent = e.message;
+  }
+}
+
+function editable(flag) {
+  return {
+    description: flag.description, enabled: flag.enabled, defaultVariant: flag.defaultVariant,
+    variants: flag.variants, rules: flag.rules, layer: flag.layer, version: flag.version,
+  };
+}
+
+async function openFlag(key) {
+  selected = key;
+  $('message').textContent = '';
+  $('detail').classList.remove('hidden');
+  $('results-block').classList.remove('hidden');
+  try {
+    const flag = await api('GET', '/api/v1/flags/' + encodeURIComponent(key));
+    $('title').textContent = flag.key + '  ·  v' + flag.version + '  ·  salt ' + flag.salt;
+    $('editor').value = JSON.stringify(editable(flag), null, 2);
+    $('kill').disabled = !flag.enabled;
+    $('archive').disabled = flag.archived;
+    $('save').disabled = flag.archived;
+    await Promise.all([loadResults(key), loadAudit(key)]);
+  } catch (e) {
+    $('message').textContent = e.message;
+  }
+  loadFlags();
+}
+
+function newFlag() {
+  selected = '';
+  $('detail').classList.remove('hidden');
+  $('results-block').classList.add('hidden');
+  $('title').textContent = 'New flag';
+  $('message').textContent = '';
+  $('editor').value = JSON.stringify(TEMPLATE, null, 2);
+  $('kill').disabled = $('archive').disabled = true;
+  $('save').disabled = false;
+}
+
+const pct = x => (x * 100).toFixed(2) + '%';
+const pval = x => x === null || x === undefined ? '–' : x < 1e-4 ? x.toExponential(1) : x.toFixed(4);
+
+async function loadResults(key) {
+  const results = await api('GET', '/api/v1/experiments/' + encodeURIComponent(key) + '/results');
+  const head = ['variant', 'exposures', 'conversions', 'rate', 'lift', 'p (fixed)', 'p (sequential)'];
+  const rows = results.variants.map(v => {
+    const tr = document.createElement('tr');
+    const cells = [
+      v.variant + (v.variant === results.control ? ' (control)' : ''),
+      v.exposures.toLocaleString(), v.conversions.toLocaleString(), pct(v.conversionRate),
+      v.liftVsControl === null ? '–' : (v.liftVsControl >= 0 ? '+' : '') + pct(v.liftVsControl),
+      pval(v.pValue), pval(v.sequentialPValue),
+    ];
+    cells.forEach((text, i) => {
+      const td = document.createElement('td');
+      td.textContent = text;
+      if ((i === 5 && v.significant) || (i === 6 && v.sequentialSignificant)) td.className = 'sig';
+      tr.append(td);
+    });
+    return tr;
+  });
+  const thead = document.createElement('tr');
+  head.forEach(h => { const th = document.createElement('th'); th.textContent = h; thead.append(th); });
+  $('results').replaceChildren(thead, ...rows);
+}
+
+async function loadAudit(key) {
+  const entries = await api('GET', '/api/v1/flags/' + encodeURIComponent(key) + '/audit');
+  $('audit').replaceChildren(...entries.map(entry => {
+    const li = document.createElement('li');
+    const when = new Date(entry.at).toLocaleString();
+    li.textContent = when + '  ' + entry.action + ' by ' + entry.actor;
+    return li;
+  }));
+}
+
+async function save() {
+  $('message').textContent = '';
+  let body;
+  try {
+    body = JSON.parse($('editor').value);
+  } catch (e) {
+    $('message').textContent = 'Not valid JSON: ' + e.message;
+    return;
+  }
+  try {
+    if (selected === '') {
+      const created = await api('POST', '/api/v1/flags', body);
+      await openFlag(created.key);
+    } else {
+      await api('PUT', '/api/v1/flags/' + encodeURIComponent(selected), body);
+      await openFlag(selected);
+    }
+  } catch (e) {
+    $('message').textContent = e.message;
+  }
+}
+
+async function action(method, suffix, confirmText) {
+  if (!confirm(confirmText)) return;
+  try {
+    await api(method, '/api/v1/flags/' + encodeURIComponent(selected) + suffix);
+    await openFlag(selected);
+  } catch (e) {
+    $('message').textContent = e.message;
+  }
+}
+
+$('key').value = store.get('cohort.key');
+$('actor').value = store.get('cohort.actor');
+$('connect').onclick = loadFlags;
+$('key').onkeydown = e => { if (e.key === 'Enter') loadFlags(); };
+$('archived').onchange = loadFlags;
+$('new').onclick = newFlag;
+$('save').onclick = save;
+$('kill').onclick = () => action('POST', '/kill', 'Turn ' + selected + ' off for everyone?');
+$('archive').onclick = () => action('DELETE', '', 'Archive ' + selected + '? It drops out of the SDK config.');
+if ($('key').value) loadFlags();
+</script>
+</body>
+</html>
