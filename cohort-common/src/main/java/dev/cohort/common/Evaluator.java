@@ -18,7 +18,10 @@ public final class Evaluator {
      * <ol>
      *   <li>Flag missing: caller's default ({@code FLAG_NOT_FOUND}, variant null).</li>
      *   <li>Killed or archived: the flag's default variant.</li>
-     *   <li>Rules by priority; the first match serves its variant, or the weighted split.</li>
+     *   <li>Rules by priority; the first match serves its variant, or the weighted split. A user
+     *       outside the flag's layer slice gets the default instead of the split, so they stay
+     *       free for the layer's other experiments; fixed-variant rules such as QA allowlists
+     *       still apply to them.</li>
      *   <li>No match: the flag's default variant.</li>
      * </ol>
      */
@@ -33,6 +36,9 @@ public final class Evaluator {
             if (matches(rule, flag, user)) {
                 if (rule.variant() != null) {
                     return new Evaluation(flag.key(), rule.variant(), Reason.RULE_MATCH, false);
+                }
+                if (flag.layer() != null && !flag.layer().contains(user.id())) {
+                    return new Evaluation(flag.key(), flag.defaultVariant(), Reason.LAYER_EXCLUDED, false);
                 }
                 String variant = Bucketer.pick(flag.variants(), Bucketer.bucket(flag.salt(), user.id()));
                 return new Evaluation(flag.key(), variant, Reason.SPLIT, true);

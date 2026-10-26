@@ -36,6 +36,14 @@ public final class Bucketer {
     }
 
     /**
+     * Layer bucket: keyed by the layer name, not a flag's salt, so every flag in a layer sees the
+     * same bucket for a user and their slices partition the users between them.
+     */
+    public static int layerBucket(String layer, String userId) {
+        return bucket("layer:" + layer, userId);
+    }
+
+    /**
      * Walks variants in order, summing weights, and returns the first whose running total exceeds
      * the bucket. With control=5000, treatment=5000: bucket 3712 is control, 8120 is treatment.
      */

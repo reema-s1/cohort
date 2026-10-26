@@ -1,6 +1,7 @@
 package dev.cohort.server.flag;
 
 import dev.cohort.common.FlagDefinition;
+import dev.cohort.common.Layer;
 import dev.cohort.common.Rule;
 import dev.cohort.common.Variant;
 import jakarta.persistence.CollectionTable;
@@ -41,6 +42,12 @@ public class FlagEntity {
     private long version;
 
     private boolean archived;
+
+    private String layer;
+
+    private Integer layerStart;
+
+    private Integer layerEnd;
 
     private Instant createdAt;
 
@@ -87,7 +94,8 @@ public class FlagEntity {
                 defaultVariant,
                 version,
                 variants.stream().map(VariantEmbeddable::toVariant).toList(),
-                rules.stream().map(RuleEmbeddable::toRule).toList());
+                rules.stream().map(RuleEmbeddable::toRule).toList(),
+                getLayer());
     }
 
     public void replaceVariants(List<Variant> next) {
@@ -146,6 +154,16 @@ public class FlagEntity {
 
     public void setArchived(boolean archived) {
         this.archived = archived;
+    }
+
+    public Layer getLayer() {
+        return layer == null ? null : new Layer(layer, layerStart, layerEnd);
+    }
+
+    public void setLayer(Layer next) {
+        this.layer = next == null ? null : next.name();
+        this.layerStart = next == null ? null : next.start();
+        this.layerEnd = next == null ? null : next.end();
     }
 
     public Instant getCreatedAt() {

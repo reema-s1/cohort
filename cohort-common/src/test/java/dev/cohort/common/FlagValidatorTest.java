@@ -38,4 +38,17 @@ class FlagValidatorTest {
         assertThat(errors).anyMatch(e -> e.contains("basisPoints"));
         assertThat(errors).anyMatch(e -> e.contains("duplicate rule priority"));
     }
+
+    @Test
+    void layerSliceMustBeANonEmptyRangeOfBuckets() {
+        List<Rule> rules = List.of(Rule.percent(1, 10000, null));
+        assertThat(FlagValidator.validate(new FlagDefinition("f", true, false, "s", "control", 0, AB, rules,
+                new Layer("search", 0, 5000)))).isEmpty();
+        for (Layer bad : List.of(new Layer("search", 5000, 5000), new Layer("search", -1, 10), new Layer("search", 0, 10001))) {
+            assertThat(FlagValidator.validate(new FlagDefinition("f", true, false, "s", "control", 0, AB, rules, bad)))
+                    .anyMatch(e -> e.startsWith("layer slice"));
+        }
+        assertThat(FlagValidator.validate(new FlagDefinition("f", true, false, "s", "control", 0, AB, rules,
+                new Layer("Bad Layer", 0, 10)))).anyMatch(e -> e.startsWith("layer name"));
+    }
 }

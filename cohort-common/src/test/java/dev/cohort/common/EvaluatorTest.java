@@ -4,6 +4,7 @@ import dev.cohort.common.Evaluation.Reason;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -120,5 +121,64 @@ class EvaluatorTest {
         assertThat(counts[0] / (double) users).isBetween(0.19, 0.21);
         assertThat(counts[1] / (double) users).isBetween(0.29, 0.31);
         assertThat(counts[2] / (double) users).isBetween(0.49, 0.51);
+    }
+
+    private static FlagDefinition layered(String key, String salt, Layer layer, List<Rule> rules) {
+        return new FlagDefinition(key, true, false, salt, "control", 1, AB, rules, layer);
+    }
+
+    @Test
+    void flagsInOneLayerNeverShareAUser() {
+        List<Rule> everyone = List.of(Rule.percent(1, 10000, null));
+        FlagDefinition ranking = layered("ranking", "salt-a", new Layer("search", 0, 4000), everyone);
+        FlagDefinition snippets = layered("snippets", "salt-b", new Layer("search", 4000, 10000), everyone);
+        int users = 100_000;
+        int inRanking = 0;
+        int inSnippets = 0;
+        for (int i = 0; i < users; i++) {
+            CohortUser user = CohortUser.of("user_" + i);
+            boolean a = Evaluator.evaluate(ranking, user).inExperiment();
+            boolean b = Evaluator.evaluate(snippets, user).inExperiment();
+            assertThat(a && b).as("user_%d is in both experiments", i).isFalse();
+            assertThat(a || b).as("user_%d is in neither experiment", i).isTrue();
+            inRanking += a ? 1 : 0;
+            inSnippets += b ? 1 : 0;
+        }
+        assertThat(inRanking / (double) users).isBetween(0.39, 0.41);
+        assertThat(inSnippets / (double) users).isBetween(0.59, 0.61);
+    }
+
+    @Test
+    void usersOutsideTheLayerSliceGetTheDefault() {
+        FlagDefinition f = layered("ranking", "salt", new Layer("search", 0, 1), List.of(Rule.percent(1, 10000, null)));
+        String outside = IntStream.range(0, 1000).mapToObj(i -> "user_" + i)
+                .filter(id -> Bucketer.layerBucket("search", id) != 0)
+                .findFirst().orElseThrow();
+        Evaluation result = Evaluator.evaluate(f, CohortUser.of(outside));
+        assertThat(result.reason()).isEqualTo(Reason.LAYER_EXCLUDED);
+        assertThat(result.variant()).isEqualTo("control");
+        assertThat(result.inExperiment()).isFalse();
+    }
+
+    @Test
+    void allowlistStillAppliesOutsideTheLayerSlice() {
+        FlagDefinition f = layered("ranking", "salt", new Layer("search", 0, 1),
+                List.of(Rule.allowlist(1, List.of("qa-1"), "treatment"), Rule.percent(2, 10000, null)));
+        assertThat(Evaluator.evaluate(f, CohortUser.of("qa-1")).variant()).isEqualTo("treatment");
+    }
+
+    @Test
+    void theLayerSliceDoesNotSkewTheSplitWithinIt() {
+        FlagDefinition f = layered("ranking", "salt", new Layer("search", 0, 5000), List.of(Rule.percent(1, 10000, null)));
+        int inExperiment = 0;
+        int treatment = 0;
+        for (int i = 0; i < 200_000; i++) {
+            Evaluation result = Evaluator.evaluate(f, CohortUser.of("user_" + i));
+            if (result.inExperiment()) {
+                inExperiment++;
+                treatment += "treatment".equals(result.variant()) ? 1 : 0;
+            }
+        }
+        assertThat(treatment / (double) inExperiment).isBetween(0.49, 0.51);
     }
 }

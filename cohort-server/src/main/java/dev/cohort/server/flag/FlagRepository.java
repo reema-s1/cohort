@@ -14,6 +14,8 @@ public interface FlagRepository extends JpaRepository<FlagEntity, String> {
 
     List<FlagEntity> findAllByOrderByKey();
 
+    List<FlagEntity> findByLayerAndArchivedFalse(String layer);
+
     /** SELECT ... FOR UPDATE, so the version check and the write happen atomically. */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select f from FlagEntity f where f.key = :key")

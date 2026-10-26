@@ -18,6 +18,11 @@ public record Evaluation(String flagKey, String variant, Reason reason, boolean 
         RULE_MATCH,
         /** A rule matched and served the weighted split. */
         SPLIT,
+        /**
+         * A rule matched for the split, but the user is outside the flag's layer slice and so
+         * belongs to another experiment in the layer. The default variant is served.
+         */
+        LAYER_EXCLUDED,
         /** No rule matched. The default variant is served. */
         DEFAULT,
         /** Evaluation failed. The caller's default is served. */

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.cohort.common.FlagDefinition;
 import dev.cohort.common.FlagValidator;
+import dev.cohort.common.Layer;
 import dev.cohort.server.audit.AuditEntry;
 import dev.cohort.server.audit.AuditRepository;
 import dev.cohort.server.flag.FlagDtos.CreateFlagRequest;
@@ -78,7 +79,9 @@ public class FlagService {
         entity.setDefaultVariant(request.defaultVariant());
         entity.replaceVariants(request.variants());
         entity.replaceRules(request.rules() == null ? List.of() : request.rules());
+        entity.setLayer(request.layer());
         validate(entity);
+        checkLayerIsFree(entity);
 
         // Assigned id, so Spring Data merges; use the managed copy it returns.
         entity = flags.saveAndFlush(entity);
@@ -105,7 +108,9 @@ public class FlagService {
         entity.setDefaultVariant(request.defaultVariant());
         entity.replaceVariants(request.variants());
         entity.replaceRules(request.rules() == null ? List.of() : request.rules());
+        entity.setLayer(request.layer());
         validate(entity);
+        checkLayerIsFree(entity);
 
         entity.incrementVersion();
         recordChange(entity, "UPDATE", before, actor);
@@ -139,6 +144,26 @@ public class FlagService {
         entity.incrementVersion();
         recordChange(entity, "ARCHIVE", before, actor);
         return FlagResponse.of(entity);
+    }
+
+    /**
+     * Slices in one layer must not overlap, or a user could land in two of its experiments. The
+     * check reads other flags, so it holds the config version lock (which every write takes
+     * anyway) to stop two concurrent writes from claiming the same buckets.
+     */
+    private void checkLayerIsFree(FlagEntity entity) {
+        Layer layer = entity.getLayer();
+        if (layer == null) {
+            return;
+        }
+        configVersion.lock();
+        for (FlagEntity other : flags.findByLayerAndArchivedFalse(layer.name())) {
+            if (!other.getKey().equals(entity.getKey()) && layer.overlaps(other.getLayer())) {
+                Layer taken = other.getLayer();
+                throw new FlagConflictException("layer '" + layer.name() + "' slice [" + layer.start() + ", " + layer.end()
+                        + ") overlaps flag '" + other.getKey() + "' at [" + taken.start() + ", " + taken.end() + ")");
+            }
+        }
     }
 
     private void recordChange(FlagEntity entity, String action, Map<String, Object> before, String actor) {

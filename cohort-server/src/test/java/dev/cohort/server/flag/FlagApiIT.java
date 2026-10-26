@@ -1,6 +1,7 @@
 package dev.cohort.server.flag;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import dev.cohort.common.Layer;
 import dev.cohort.common.Rule;
 import dev.cohort.common.Variant;
 import dev.cohort.server.TestcontainersConfiguration;
@@ -173,5 +174,48 @@ class FlagApiIT {
         sdkOnly.set("X-API-Key", "dev-sdk-key");
         assertThat(http.exchange("/api/v1/flags", HttpMethod.GET, new HttpEntity<>(sdkOnly), String.class).getStatusCode())
                 .isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
+
+    private ResponseEntity<JsonNode> createInLayer(String key, Layer layer) {
+        var request = new CreateFlagRequest(key, null, true, null, "control", AB,
+                List.of(Rule.percent(1, 10000, null)), layer);
+        return call(HttpMethod.POST, "/api/v1/flags", request, JsonNode.class);
+    }
+
+    @Test
+    void flagsInALayerCannotClaimOverlappingSlices() {
+        String layer = "layer-" + UUID.randomUUID().toString().substring(0, 8);
+        String first = uniqueKey();
+        assertThat(createInLayer(first, new Layer(layer, 0, 5000)).getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        assertThat(createInLayer(uniqueKey(), new Layer(layer, 5000, 10000)).getStatusCode()).isEqualTo(HttpStatus.CREATED);
+
+        ResponseEntity<JsonNode> overlap = createInLayer(uniqueKey(), new Layer(layer, 4000, 6000));
+        assertThat(overlap.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(overlap.getBody().get("detail").asText()).contains("overlaps flag '" + first + "'");
+        // The same range in a different layer is a separate hash space, so it is fine.
+        assertThat(createInLayer(uniqueKey(), new Layer(layer + "-other", 4000, 6000)).getStatusCode())
+                .isEqualTo(HttpStatus.CREATED);
+
+        // Archiving the first flag frees its slice.
+        call(HttpMethod.DELETE, "/api/v1/flags/" + first, null, FlagResponse.class);
+        assertThat(createInLayer(uniqueKey(), new Layer(layer, 1000, 4000)).getStatusCode()).isEqualTo(HttpStatus.CREATED);
+    }
+
+    @Test
+    void anUpdateCannotMoveAFlagOntoAnotherFlagsSlice() {
+        String layer = "layer-" + UUID.randomUUID().toString().substring(0, 8);
+        createInLayer(uniqueKey(), new Layer(layer, 0, 5000));
+        String key = uniqueKey();
+        FlagResponse created = create(key);
+        assertThat(created.layer()).isNull();
+
+        var onto = new UpdateFlagRequest(null, true, "control", AB, List.of(), created.version(), new Layer(layer, 2500, 7500));
+        assertThat(call(HttpMethod.PUT, "/api/v1/flags/" + key, onto, JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+
+        var beside = new UpdateFlagRequest(null, true, "control", AB, List.of(), created.version(), new Layer(layer, 5000, 7500));
+        FlagResponse moved = call(HttpMethod.PUT, "/api/v1/flags/" + key, beside, FlagResponse.class).getBody();
+        assertThat(moved.layer()).isEqualTo(new Layer(layer, 5000, 7500));
+        assertThat(call(HttpMethod.GET, "/api/v1/flags/" + key, null, FlagResponse.class).getBody().layer())
+                .isEqualTo(new Layer(layer, 5000, 7500));
     }
 }

@@ -47,6 +47,16 @@ public final class FlagValidator {
             errors.add("defaultVariant must name one of the variants");
         }
 
+        Layer layer = flag.layer();
+        if (layer != null) {
+            if (layer.name() == null || !KEY.matcher(layer.name()).matches()) {
+                errors.add("layer name must be 1-100 chars of lowercase letters, digits, '.', '_' or '-'");
+            }
+            if (layer.start() < 0 || layer.end() > Bucketer.BUCKETS || layer.start() >= layer.end()) {
+                errors.add("layer slice must satisfy 0 <= start < end <= 10000, got [" + layer.start() + ", " + layer.end() + ")");
+            }
+        }
+
         Set<Integer> priorities = new HashSet<>();
         for (Rule rule : flag.rules()) {
             if (!priorities.add(rule.priority())) {

@@ -20,6 +20,11 @@ public class ConfigVersionRepository {
         return jdbc.queryForObject("SELECT version FROM config_version WHERE id = 1", Long.class);
     }
 
+    /** Takes the row lock up front, so checks that span flags run one writer at a time. */
+    public void lock() {
+        jdbc.queryForObject("SELECT version FROM config_version WHERE id = 1 FOR UPDATE", Long.class);
+    }
+
     public long bump() {
         return jdbc.queryForObject("UPDATE config_version SET version = version + 1 WHERE id = 1 RETURNING version", Long.class);
     }
