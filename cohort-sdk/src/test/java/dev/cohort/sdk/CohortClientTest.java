@@ -102,6 +102,33 @@ class CohortClientTest {
     }
 
     @Test
+    void streamingDeliversAKillSwitchWithoutWaitingForAPoll() throws Exception {
+        try (CohortClient cohort = client().pollInterval(Duration.ofHours(1)).streaming(true).build()) {
+            await(() -> server.streamConnections.get() == 1);
+            assertThat(cohort.isEnabled("dark-mode", CohortUser.of("u"), false)).isTrue();
+
+            server.setConfig(config(2, false));
+            server.announce();
+            await(() -> !cohort.isEnabled("dark-mode", CohortUser.of("u"), true));
+            assertThat(cohort.stats().configVersion()).isEqualTo(2);
+        }
+    }
+
+    @Test
+    void streamReconnectsAfterAnOutageAndCatchesUp() throws Exception {
+        try (CohortClient cohort = client().pollInterval(Duration.ofHours(1)).streaming(true).build()) {
+            await(() -> server.streamConnections.get() == 1);
+            server.stop();
+            server.setConfig(config(2, false)); // changed while the SDK could not hear about it
+            server.restart();
+
+            // The version sent on reconnect is newer than the SDK's, so it fetches straight away.
+            await(() -> !cohort.isEnabled("dark-mode", CohortUser.of("u"), true));
+            assertThat(server.streamConnections.get()).isGreaterThanOrEqualTo(2);
+        }
+    }
+
+    @Test
     void olderConfigVersionsAreIgnored() throws Exception {
         server.setConfig(config(5, true));
         try (CohortClient cohort = client().build()) {

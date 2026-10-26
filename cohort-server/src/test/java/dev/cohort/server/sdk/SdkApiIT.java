@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.client.TestRestTemplate;
+import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -18,9 +19,18 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.io.UncheckedIOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -31,6 +41,9 @@ class SdkApiIT {
 
     @Autowired
     TestRestTemplate http;
+
+    @LocalServerPort
+    int port;
 
     private static HttpHeaders headers(String apiKey) {
         HttpHeaders headers = new HttpHeaders();
@@ -81,6 +94,47 @@ class SdkApiIT {
         assertThat(after.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(after.getBody().version()).isGreaterThan(before.getBody().version());
         assertThat(after.getBody().flag(key).enabled()).isFalse();
+    }
+
+    @Test
+    void streamAnnouncesTheCurrentVersionOnConnectAndEveryChangeAfter() throws Exception {
+        String key = createFlag();
+        HttpRequest request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/sdk/v1/stream"))
+                .header("X-API-Key", "dev-sdk-key")
+                .build();
+        BlockingQueue<Long> versions = new LinkedBlockingQueue<>();
+        HttpResponse<Stream<String>> response = HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofLines());
+        assertThat(response.statusCode()).isEqualTo(200);
+        assertThat(response.headers().firstValue("Content-Type")).hasValueSatisfying(v -> assertThat(v).startsWith("text/event-stream"));
+        Thread reader = Thread.ofVirtual().start(() -> {
+            try {
+                response.body()
+                        .filter(line -> line.startsWith("data:"))
+                        .forEach(line -> versions.add(Long.parseLong(line.substring(5).trim())));
+            } catch (UncheckedIOException e) {
+                // the test closed the stream
+            }
+        });
+        try {
+            Long onConnect = versions.poll(5, TimeUnit.SECONDS);
+            assertThat(onConnect).isEqualTo(getConfig(null).getBody().version());
+
+            http.exchange("/api/v1/flags/" + key + "/kill", HttpMethod.POST, new HttpEntity<>(headers("dev-admin-key")), JsonNode.class);
+
+            // A heartbeat may repeat the current version first; wait for the newer one.
+            Long afterKill = versions.poll(5, TimeUnit.SECONDS);
+            while (afterKill != null && afterKill <= onConnect) {
+                afterKill = versions.poll(5, TimeUnit.SECONDS);
+            }
+            assertThat(afterKill).isNotNull().isGreaterThan(onConnect);
+            // The announced version is already being served, so fetching it right away is not a 304.
+            ResponseEntity<FlagConfig> config = getConfig("\"" + onConnect + "\"");
+            assertThat(config.getBody().version()).isEqualTo(afterKill);
+            assertThat(config.getBody().flag(key).enabled()).isFalse();
+        } finally {
+            response.body().close();
+            reader.interrupt();
+        }
     }
 
     @Test

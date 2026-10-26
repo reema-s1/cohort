@@ -41,6 +41,10 @@ import java.util.concurrent.atomic.LongAdder;
  * <p>Fail-safe order when evaluating a flag: the in-memory config; else the disk snapshot, if
  * the SDK just started while the server was unreachable; else the caller's default. A flag check
  * never throws.
+ *
+ * <p>With {@link Builder#streaming(boolean)} the SDK also holds a server-sent event connection and
+ * fetches a new config as soon as one is announced, so a kill switch lands in well under a second
+ * rather than on the next poll. Polling continues underneath as the fallback.
  */
 public final class CohortClient implements AutoCloseable {
 
@@ -53,6 +57,7 @@ public final class CohortClient implements AutoCloseable {
     private final ConfigStore store;
     private final EventBuffer events;
     private final ScheduledExecutorService poller;
+    private final ChangeStream changes;
     private final Set<String> exposed = ConcurrentHashMap.newKeySet();
 
     private final LongAdder evaluations = new LongAdder();
@@ -75,6 +80,7 @@ public final class CohortClient implements AutoCloseable {
         }
         long millis = builder.pollInterval.toMillis();
         poller.scheduleWithFixedDelay(this::poll, millis, millis, TimeUnit.MILLISECONDS);
+        this.changes = builder.streaming ? new ChangeStream(http, this::onVersionAnnounced) : null;
     }
 
     public static Builder builder() {
@@ -94,6 +100,12 @@ public final class CohortClient implements AutoCloseable {
             pollFailures.increment();
             log.debug("Cohort config poll failed", e);
             return false;
+        }
+    }
+
+    private void onVersionAnnounced(long version) {
+        if (version > store.version()) {
+            poll();
         }
     }
 
@@ -172,6 +184,9 @@ public final class CohortClient implements AutoCloseable {
     /** Stops polling and flushes buffered events. */
     @Override
     public void close() {
+        if (changes != null) {
+            changes.close();
+        }
         poller.shutdownNow();
         events.close();
     }
@@ -183,6 +198,7 @@ public final class CohortClient implements AutoCloseable {
         private Duration flushInterval = Duration.ofSeconds(5);
         private Duration httpTimeout = Duration.ofSeconds(2);
         private int bufferCapacity = 10_000;
+        private boolean streaming;
         private Path snapshotFile = Path.of(System.getProperty("user.home"), ".cohort", "config-snapshot.json");
 
         private Builder() {
@@ -215,6 +231,12 @@ public final class CohortClient implements AutoCloseable {
 
         public Builder bufferCapacity(int bufferCapacity) {
             this.bufferCapacity = bufferCapacity;
+            return this;
+        }
+
+        /** Also listen for changes over server-sent events, for near-instant kill switches. Off by default. */
+        public Builder streaming(boolean streaming) {
+            this.streaming = streaming;
             return this;
         }
 

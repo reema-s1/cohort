@@ -9,6 +9,8 @@ import dev.cohort.common.EventBatch;
 import dev.cohort.common.FlagConfig;
 
 import java.io.IOException;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.net.BindException;
 import java.net.InetSocketAddress;
 import java.util.List;
@@ -22,6 +24,8 @@ final class FakeCohortServer implements AutoCloseable {
     private final List<CohortEvent> events = new CopyOnWriteArrayList<>();
     final AtomicInteger configRequests = new AtomicInteger();
     final AtomicInteger notModified = new AtomicInteger();
+    final AtomicInteger streamConnections = new AtomicInteger();
+    private final List<HttpExchange> streams = new CopyOnWriteArrayList<>();
     private volatile FlagConfig config;
     private volatile boolean failEvents;
     private HttpServer server;
@@ -36,11 +40,13 @@ final class FakeCohortServer implements AutoCloseable {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", requestedPort), 0);
         server.createContext("/sdk/v1/config", this::config);
         server.createContext("/sdk/v1/events", this::events);
+        server.createContext("/sdk/v1/stream", this::stream);
         server.start();
         port = server.getAddress().getPort();
     }
 
     void stop() {
+        closeStreams();
         server.stop(0);
     }
 
@@ -65,6 +71,15 @@ final class FakeCohortServer implements AutoCloseable {
 
     void setConfig(FlagConfig config) {
         this.config = config;
+    }
+
+    /** Announces the current version on every open stream, as the real server does after a change. */
+    void announce() {
+        for (HttpExchange exchange : streams) {
+            if (!sendVersion(exchange)) {
+                streams.remove(exchange);
+            }
+        }
     }
 
     void failEvents(boolean fail) {
@@ -93,6 +108,33 @@ final class FakeCohortServer implements AutoCloseable {
         exchange.close();
     }
 
+    /** Held open; the current version goes out on connect and on every announce(). */
+    private void stream(HttpExchange exchange) throws IOException {
+        streamConnections.incrementAndGet();
+        exchange.getResponseHeaders().set("Content-Type", "text/event-stream");
+        exchange.sendResponseHeaders(200, 0);
+        if (sendVersion(exchange)) {
+            streams.add(exchange);
+        }
+    }
+
+    private boolean sendVersion(HttpExchange exchange) {
+        try {
+            OutputStream out = exchange.getResponseBody();
+            out.write(("event:config\ndata:" + config.version() + "\n\n").getBytes(StandardCharsets.UTF_8));
+            out.flush();
+            return true;
+        } catch (IOException e) {
+            exchange.close();
+            return false;
+        }
+    }
+
+    private void closeStreams() {
+        streams.forEach(HttpExchange::close);
+        streams.clear();
+    }
+
     private void events(HttpExchange exchange) throws IOException {
         if (failEvents) {
             exchange.sendResponseHeaders(503, -1);
@@ -107,6 +149,7 @@ final class FakeCohortServer implements AutoCloseable {
 
     @Override
     public void close() {
+        closeStreams();
         server.stop(0);
     }
 }

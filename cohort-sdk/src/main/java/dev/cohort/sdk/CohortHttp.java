@@ -13,8 +13,9 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
+import java.util.stream.Stream;
 
-/** The SDK's two calls to the server: poll config, send events. */
+/** The SDK's calls to the server: poll config, send events, and optionally listen for changes. */
 final class CohortHttp {
 
     private static final String API_KEY_HEADER = "X-API-Key";
@@ -22,6 +23,7 @@ final class CohortHttp {
     private final HttpClient client;
     private final URI configUri;
     private final URI eventsUri;
+    private final URI streamUri;
     private final String apiKey;
     private final Duration timeout;
     private final ObjectMapper mapper;
@@ -30,6 +32,7 @@ final class CohortHttp {
         String base = serverUrl.endsWith("/") ? serverUrl.substring(0, serverUrl.length() - 1) : serverUrl;
         this.configUri = URI.create(base + "/sdk/v1/config");
         this.eventsUri = URI.create(base + "/sdk/v1/events");
+        this.streamUri = URI.create(base + "/sdk/v1/stream");
         this.apiKey = apiKey;
         this.timeout = timeout;
         this.mapper = mapper;
@@ -56,6 +59,25 @@ final class CohortHttp {
             throw new IOException("config fetch failed with HTTP " + response.statusCode());
         }
         return Optional.of(mapper.readValue(response.body(), FlagConfig.class));
+    }
+
+    /**
+     * Opens the server-sent event stream of config versions. The returned lines arrive as the
+     * server sends them; closing the stream closes the connection.
+     */
+    Stream<String> openStream() throws IOException, InterruptedException {
+        // No request timeout: it would cut a healthy idle stream. The server recycles connections.
+        HttpRequest request = HttpRequest.newBuilder(streamUri)
+                .header(API_KEY_HEADER, apiKey)
+                .header("Accept", "text/event-stream")
+                .GET()
+                .build();
+        HttpResponse<Stream<String>> response = client.send(request, HttpResponse.BodyHandlers.ofLines());
+        if (response.statusCode() != 200) {
+            response.body().close();
+            throw new IOException("config stream failed with HTTP " + response.statusCode());
+        }
+        return response.body();
     }
 
     void sendEvents(List<CohortEvent> events) throws IOException, InterruptedException {

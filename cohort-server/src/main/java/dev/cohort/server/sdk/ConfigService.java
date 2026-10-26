@@ -12,6 +12,7 @@ import dev.cohort.server.flag.FlagEntity;
 import dev.cohort.server.flag.FlagRepository;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -28,6 +29,9 @@ import java.util.stream.Collectors;
  * Serves the full flag config from memory so {@code /sdk/v1/config} never hits Postgres per
  * request. The snapshot is rebuilt after every committed flag change on this instance, and expires
  * after 30 s as a safety net for changes made through another server instance.
+ *
+ * <p>Every new version is also announced on the {@link ConfigStream}, so streaming SDKs fetch it
+ * at once instead of on their next poll.
  */
 @Service
 public class ConfigService {
@@ -44,14 +48,16 @@ public class ConfigService {
     private final FlagRepository flags;
     private final ConfigVersionRepository configVersion;
     private final ObjectMapper mapper;
+    private final ConfigStream stream;
     private final TransactionTemplate readSnapshot;
     private final LoadingCache<String, Snapshot> cache;
 
     public ConfigService(FlagRepository flags, ConfigVersionRepository configVersion, ObjectMapper mapper,
-                         PlatformTransactionManager transactions, MeterRegistry registry) {
+                         PlatformTransactionManager transactions, MeterRegistry registry, ConfigStream stream) {
         this.flags = flags;
         this.configVersion = configVersion;
         this.mapper = mapper;
+        this.stream = stream;
         // REPEATABLE READ: the flags and the version number come from the same database snapshot,
         // so a config can never be labelled with a version it does not contain.
         this.readSnapshot = new TransactionTemplate(transactions);
@@ -72,7 +78,20 @@ public class ConfigService {
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onFlagChanged(FlagChangedEvent event) {
-        cache.put(KEY, load());
+        Snapshot snapshot = load();
+        cache.put(KEY, snapshot);
+        // After the cache swap, so an SDK fetching in response gets the new config, not a 304.
+        stream.publish(snapshot.version());
+    }
+
+    /**
+     * Keeps streams alive and, by reading the cache, reloads it once it has expired; that is how a
+     * change made through another server instance reaches this instance's streams.
+     */
+    @Scheduled(fixedDelayString = "PT15S")
+    void heartbeat() {
+        stream.publish(current().version());
+        stream.heartbeat();
     }
 
     private Snapshot load() {

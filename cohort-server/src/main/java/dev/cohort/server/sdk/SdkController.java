@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.context.request.WebRequest;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -26,9 +27,11 @@ import java.util.Map;
 public class SdkController {
 
     private final ConfigService configService;
+    private final ConfigStream configStream;
 
-    public SdkController(ConfigService configService) {
+    public SdkController(ConfigService configService, ConfigStream configStream) {
         this.configService = configService;
+        this.configStream = configStream;
     }
 
     /**
@@ -46,6 +49,15 @@ public class SdkController {
                 .cacheControl(CacheControl.noCache())
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(snapshot.json());
+    }
+
+    /**
+     * Server-sent events: {@code event: config} with the new config version whenever a flag
+     * changes, and once on connect. The SDK fetches {@code /config} when the version is newer.
+     */
+    @GetMapping(path = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter stream() {
+        return configStream.subscribe(configService.current().version());
     }
 
     public record EvaluateRequest(@NotBlank String userId, Map<String, String> attributes, List<String> flags) {
