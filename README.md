@@ -1,15 +1,34 @@
 # Cohort
 
-A feature flag and A/B experimentation service in Java. Product teams create a flag, roll it out
-to a percentage of users, run an experiment, and read which variant won.
+[![CI](https://github.com/reema-s1/cohort/actions/workflows/ci.yml/badge.svg)](https://github.com/reema-s1/cohort/actions/workflows/ci.yml)
+![Java 21](https://img.shields.io/badge/Java-21-blue)
+![Spring Boot 3.5](https://img.shields.io/badge/Spring%20Boot-3.5-6db33f)
 
-Flags are evaluated **inside the product app** by a Java SDK, so a flag check is a hash and a loop
-(about 230 ns), never a network call. If the Cohort server goes down, apps keep serving the last
-config they had.
+Cohort is a feature flag and A/B experimentation service written in Java. Teams create a flag,
+roll it out to a percentage of users, run an experiment on it, and read which variant won.
+
+Flags are evaluated **inside your application** by the Cohort Java SDK. A flag check is a hash and
+a loop (about 230 ns), never a network call, and if the Cohort server goes down your app keeps
+serving the last config it saw.
+
+## Features
+
+- **Local evaluation:** deterministic MurmurHash3 bucketing with allowlist, attribute and
+  percentage rules. Every SDK instance gives the same answer with no shared state.
+- **Safe rollouts:** ramping from 10% to 20% only adds users, there's a kill switch, and every
+  change carries optimistic locking and a full audit log.
+- **Instant updates:** the SDK polls with ETags and can also hold a server-sent events connection,
+  so a kill switch can reach it in under a second.
+- **Trustworthy results:** exactly-once counting on top of at-least-once delivery, first-exposure
+  attribution, and both a fixed-sample p-value and one that stays valid however often you check.
+- **Mutually exclusive experiments:** flags in the same layer never share a user.
+- **Operable:** an admin console, OpenAPI docs, Prometheus metrics and a Grafana dashboard.
+
+## Architecture
 
 ```mermaid
 flowchart LR
-    subgraph app[Product app]
+    subgraph app[Your application]
         sdk[Cohort Java SDK<br/>local evaluation<br/>atomic snapshot<br/>disk fallback<br/>event buffer]
     end
     eng([Product engineer]) -- flags, kill switch, results --> server
@@ -25,16 +44,17 @@ flowchart LR
 
 ## Quick start
 
-Needs Docker and JDK 21+.
+You need Docker and JDK 21 or newer.
 
 ```sh
-docker compose up -d --build          # Postgres, Kafka, server, Prometheus, Grafana
+docker compose up -d --build                      # Postgres, Kafka, server, Prometheus, Grafana
 mvn -pl cohort-simulator -am install -DskipTests
-mvn -pl cohort-simulator exec:java    # 100,000 simulated users through the real SDK
+mvn -pl cohort-simulator exec:java                # 100,000 simulated users through the real SDK
 ```
 
-The simulator creates a `new-search-ranking` experiment, sends traffic with control converting at
-10% and treatment at 11%, and prints the results (cumulative; this is after two runs):
+The simulator creates a `new-search-ranking` experiment. It sends traffic in which control converts
+at 10% and treatment at 11%, then prints the results. These come from a real run; the counts are
+cumulative over two runs:
 
 ```
 variant         exposures  conversions       rate       lift      p-value       seq. p
@@ -42,15 +62,15 @@ control           100,128        9,987      9.97%          -            -       
 treatment          99,872       10,912     10.93%      +9.5%     3.50e-12     3.54e-10
 ```
 
-| URL | What |
+| URL | What's there |
 |---|---|
 | http://localhost:8080 | Admin console: flags, kill switch, results, audit log |
-| http://localhost:8080/swagger-ui.html | REST API docs |
+| http://localhost:8080/swagger-ui.html | REST API documentation |
 | http://localhost:3000 | Grafana dashboard (anonymous viewer) |
 | http://localhost:9090 | Prometheus |
 
-Dev API keys are `dev-admin-key` (admin API) and `dev-sdk-key` (SDK API); override them with
-`COHORT_ADMIN_KEY` and `COHORT_SDK_KEY`.
+The development API keys are `dev-admin-key` for the admin API and `dev-sdk-key` for the SDK API.
+Override them with `COHORT_ADMIN_KEY` and `COHORT_SDK_KEY`.
 
 ## Using the SDK
 
@@ -59,51 +79,21 @@ CohortClient cohort = CohortClient.builder()
     .serverUrl("http://localhost:8080")
     .apiKey(System.getenv("COHORT_KEY"))
     .pollInterval(Duration.ofSeconds(10))
-    .streaming(true)                     // optional: SSE push, so a kill switch lands in under a second
+    .streaming(true)                     // optional: push updates over SSE
     .build();
 
 CohortUser user = CohortUser.of("user-123").with("country", "IN");
+
 String variant = cohort.getVariant("new-search-ranking", user);   // "control" or "treatment"
-boolean on = cohort.isEnabled("dark-mode", user, false);           // false = fallback default
-cohort.track("new-search-ranking", user, "applied_to_job");        // conversion event
+boolean on = cohort.isEnabled("dark-mode", user, false);           // false is the fallback
+cohort.track("new-search-ranking", user, "applied_to_job");        // record a conversion
 
 new CohortMetrics(cohort).bindTo(meterRegistry);                   // optional Micrometer metrics
 ```
 
-## Modules
+A flag check never throws. If the SDK has no config at all, it returns the default you passed in.
 
-| Module | What it is |
-|---|---|
-| `cohort-common` | Flag model, MurmurHash3 bucketing, rule evaluator and validator, shared by server and SDK |
-| `cohort-server` | Spring Boot service: admin API, SDK config API, event ingest, aggregator, results |
-| `cohort-sdk` | Java client: local evaluation, ETag polling, disk snapshot, buffered events |
-| `cohort-simulator` | Generates experiment traffic through the real SDK |
-| `cohort-bench` | JMH micro-benchmarks of flag evaluation |
-
-## API
-
-**Admin** (`X-API-Key: <admin key>`, optional `X-Actor` for the audit log)
-
-| Method and path | What it does |
-|---|---|
-| `POST /api/v1/flags` | Create a flag with variants and rules |
-| `GET /api/v1/flags`, `GET /api/v1/flags/{key}` | List / read flags |
-| `PUT /api/v1/flags/{key}` | Replace a flag; must send the `version` it read, 409 if stale |
-| `POST /api/v1/flags/{key}/kill` | Kill switch: off for everyone on the next SDK poll |
-| `DELETE /api/v1/flags/{key}` | Archive; drops out of the SDK config |
-| `GET /api/v1/flags/{key}/audit` | Who changed what, when, with before and after |
-| `GET /api/v1/experiments/{key}/results` | Per-variant exposures, conversions, rate, lift, fixed and sequential p-values |
-
-**SDK** (`X-API-Key: <sdk key>`)
-
-| Method and path | What it does |
-|---|---|
-| `GET /sdk/v1/config` | Full config; `If-None-Match` with the version ETag returns 304 |
-| `GET /sdk/v1/stream` | Server-sent events: the config version on connect and after every change |
-| `POST /sdk/v1/events` | Up to 500 exposure and conversion events |
-| `POST /sdk/v1/evaluate` | Server-side evaluation for clients that cannot run the SDK |
-
-A flag:
+## Defining a flag
 
 ```json
 {
@@ -119,111 +109,133 @@ A flag:
 }
 ```
 
-Rules run in priority order and the first match wins. A rule with a `variant` serves that variant;
-a rule with `"variant": null` serves the weighted split and puts the user in the experiment. Users
-no rule matches get `defaultVariant`. Weights are basis points and must sum to 10000.
+- Rules run in priority order, and the first one that matches wins.
+- A rule with a `variant` always serves that variant. A rule with `"variant": null` serves the
+  weighted split and puts the user into the experiment.
+- Users who match no rule get `defaultVariant`.
+- Weights are in basis points and must add up to 10,000.
+- `layer` is optional. Flags in the same layer must claim slices of its 10,000 buckets that don't
+  overlap; the API rejects an overlap with 409. Users outside a flag's slice get `defaultVariant`,
+  but allowlist rules still apply to them, so QA can see every variant.
 
-`layer` is optional. Flags in the same layer must claim non-overlapping slices of its 10000
-buckets (the API returns 409 otherwise), and no user is ever in two of their experiments. Users
-outside a flag's slice get `defaultVariant` with reason `LAYER_EXCLUDED`; allowlist rules still
-reach them, so QA can see every variant.
+## API
 
-## Design decisions
+**Admin API** (`X-API-Key: <admin key>`; optional `X-Actor` header for the audit log)
 
-**Hash, don't store.** A user's variant is `murmur3_32(salt + ":" + userId) mod 10000`, then a walk
-over the cumulative weights. It is a pure function, so any SDK instance gets the same answer with no
-database and no shared state, and assignment stays sticky for free.
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/v1/flags` | Create a flag |
+| `GET /api/v1/flags` · `GET /api/v1/flags/{key}` | List or read flags |
+| `PUT /api/v1/flags/{key}` | Replace a flag; send the `version` you read, or get 409 if it changed |
+| `POST /api/v1/flags/{key}/kill` | Kill switch: turn the flag off for everyone |
+| `DELETE /api/v1/flags/{key}` | Archive a flag; it drops out of the SDK config |
+| `GET /api/v1/flags/{key}/audit` | Who changed what and when, with before and after |
+| `GET /api/v1/experiments/{key}/results` | Exposures, conversions, rate, lift and p-values per variant |
 
-**Per-flag salt.** Without it, the same users land in treatment of every experiment and experiments
-contaminate each other. A test checks two flags overlap on about 25% of users, not 50%.
+**SDK API** (`X-API-Key: <sdk key>`)
 
-**Separate rollout and split hashes.** A `PERCENT` rule hashes `salt:rollout` while the split hashes
-`salt`. With one hash, a 10% rollout (buckets 0–999) of a 50/50 split would put everyone in control.
+| Endpoint | Purpose |
+|---|---|
+| `GET /sdk/v1/config` | Full config; `If-None-Match` with the current ETag returns 304 |
+| `GET /sdk/v1/stream` | Server-sent events: the config version on connect and after each change |
+| `POST /sdk/v1/events` | Send up to 500 exposure and conversion events |
+| `POST /sdk/v1/evaluate` | Server-side evaluation for clients that can't run the SDK |
 
-**Ramping only adds users.** Going from 10% to 20% adds buckets 1000–1999; nobody already in flips
-out. Tested.
+## How it works
 
-**Only split assignments are exposures.** Allowlisted QA users and default-served users never count
-toward results.
+### Assignment
 
-**Fail safe, in order:** in-memory snapshot, then the disk snapshot if the SDK starts while the
-server is down, then the caller's default. A flag check never throws. The chaos tests stop the
-server mid-run and restart the SDK offline.
+- **Hash, don't store.** A user's bucket is `murmur3_32(salt + ":" + userId) mod 10000`, mapped to
+  a variant by walking the cumulative weights. Because this is a pure function, assignment is
+  sticky without a database lookup.
+- **Per-flag salt.** Without a salt, the same users would land in treatment of every experiment.
+  A test checks that two 50/50 flags put about 25% of users in both treatments, as independent
+  assignments should.
+- **Separate rollout and split hashes.** A `PERCENT` rule hashes `salt:rollout`, while the split
+  hashes `salt`. With a single hash, a 10% rollout of a 50/50 split would put everyone in control.
+- **Ramping only adds users.** Going from 10% to 20% adds buckets 1000–1999, and nobody who was
+  already in drops out.
+- **Layers.** Flags in a layer bucket users by the layer's name, so they all agree on which slice a
+  user is in. Within its slice, each flag still splits by its own salt.
 
-**Atomic snapshots.** Config lives in an `AtomicReference<FlagConfig>` holding an immutable record.
-Readers never lock; the poller swaps in a whole new snapshot. Older versions are ignored, so a lagging
-server instance cannot roll an SDK back.
+### SDK resilience
 
-**Polling with ETag, push as a hint.** Polling is simple, survives proxies, and when nothing changed a
-poll is a 304 with an empty body. SDKs that opt in also hold an SSE connection that carries only the
-new version number; on hearing one they fetch the config the normal way. A dropped stream or a missed
-message only means the change arrives on the next poll, so push adds speed without adding a second
-source of truth. Each connection gets the current version on connect, so a reconnecting SDK catches
-up at once, and a 15 s heartbeat both keeps proxies from cutting idle streams and picks up changes
-made through other server instances.
+- **Fail-safe order:** in-memory snapshot, then the snapshot on disk (if the app starts while the
+  server is down), then the caller's default.
+- **Atomic snapshots.** The config is an immutable record behind an `AtomicReference`. Readers never
+  lock, and older versions are ignored, so a lagging server instance can't roll an SDK back.
+- **Polling, with push as a hint.** Most polls are a 304 with an empty body. The SSE stream carries
+  only a version number, and the SDK then fetches the config the normal way. If the stream drops,
+  changes still arrive on the next poll.
+- **Analytics never slow the app.** Events go into a bounded queue that a virtual thread flushes
+  every 5 seconds or every 500 events. When the queue is full, events are dropped and counted;
+  the app never blocks.
 
-**Layers for mutually exclusive experiments.** Flags in a layer bucket users by the layer name rather
-than their own salt, so they all agree on every user's layer bucket and disjoint slices mean disjoint
-users. Within a slice, the split still uses the flag's salt, so the split stays even. The overlap check
-reads other flags, so it runs under the same config version row lock every write already takes.
+### Counting and statistics
 
-**Sequential p-values for peeking.** The fixed-sample z-test is only valid if read once, at a sample
-size chosen up front; checking it daily and stopping at the first p < 0.05 inflates false positives.
-Results also carry an mSPRT always-valid p-value (normal mixture, τ = 1 percentage point), which may
-be checked as often as you like. In a simulated A/A test peeked at 20 times, the z-test calls a winner
-in over 10% of runs and the sequential test in under 5%.
+- **Exactly-once counts.** Every event has a UUID, and a `seen_events` primary key turns SDK retries
+  and Kafka redeliveries into no-ops. Kafka offsets are committed only after the database
+  transaction, so a crash replays events rather than losing them.
+- **First exposure wins.** Each user counts once per flag, in the variant they were first exposed
+  to, and converts at most once. Only split assignments count as exposures, so QA users and users
+  served the default never skew the results.
+- **Set-based aggregation.** Each batch takes a few `unnest()` statements plus one upsert per
+  variant. There is one consumer per partition (`COHORT_AGGREGATOR_CONSUMERS`, default 6), and
+  stats rows are locked in key order, so consumers can't deadlock.
+- **Two p-values.** The z-test p-value is valid only if you read it once, at a sample size you
+  fixed in advance. The sequential (mSPRT) p-value stays valid however often you check it. In a
+  simulated A/A test checked 20 times, the z-test declared a winner in over 10% of runs; the
+  sequential test did so in under 5%.
 
-**Analytics never slow the app.** Events go into a bounded queue flushed by a virtual thread every
-5 s or at 500 events. A full queue drops and counts; it never blocks.
+### Consistency
 
-**Exactly-once counts from at-least-once delivery.** Every event has a UUID; `seen_events` has it as
-primary key, so SDK retries and Kafka redeliveries are no-ops. A user counts once per flag, in the
-variant of their first exposure, and converts at most once. Offsets commit only after the database
-transaction, so a crash replays rather than loses.
+- **Optimistic locking.** A write must carry the version it read. A row lock makes the version
+  check and the increment atomic: in a test, eight concurrent writers produce exactly one success
+  and seven 409s.
+- **One transaction per change.** The flag write, its audit row and the global config version bump
+  commit together. After that, the in-memory config cache is rebuilt and the new version is
+  announced to streaming SDKs.
 
-**Set-based aggregation.** Each batch is a few statements over `unnest()` arrays plus one upsert
-per (flag, variant), not three round trips per event. The aggregator runs one consumer per partition
-(`COHORT_AGGREGATOR_CONSUMERS`, default 6). Events are keyed by flag and user, so one user's events
-stay in order on one consumer, and stats deltas are applied in key order so consumers cannot deadlock.
+## Project layout
 
-**Optimistic locking at the API.** Updates carry the `version` the client read; a stale one gets 409.
-The server takes a row lock (`SELECT ... FOR UPDATE`) so check-and-increment is atomic: in a test,
-eight concurrent writers from the same version produce exactly one 200 and seven 409s.
-
-**One transaction per change.** The flag write, its audit row and the global `config_version` bump
-commit together, then the server's Caffeine config cache is rebuilt, so `/sdk/v1/config` never hits
-Postgres per request.
+| Module | Contents |
+|---|---|
+| `cohort-common` | Flag model, bucketing, rule evaluator and validator, shared by server and SDK |
+| `cohort-server` | Spring Boot service: admin API, SDK API, event ingest, aggregator, results, console |
+| `cohort-sdk` | Java client: local evaluation, polling and streaming, disk snapshot, event buffer |
+| `cohort-simulator` | Generates experiment traffic through the real SDK |
+| `cohort-bench` | JMH micro-benchmarks of flag evaluation |
 
 ## Testing
 
 ```sh
-mvn verify     # unit tests + Testcontainers integration tests (needs Docker)
+mvn verify     # unit tests plus Testcontainers integration tests (needs Docker)
 ```
 
-- Evaluator: rule order, allowlist, attributes, weights, ramp stability, a 1,000,000-user
-  distribution test (each side of 50/50 within 0.5%), and layers: 100,000 users across two flags
-  in one layer with none in both.
-- SDK: ETag polling, kill switch propagation, server outage, offline restart from disk, buffer
-  overflow, batching, SSE push with polling effectively off, and stream reconnect after an outage.
-  Uses an in-process fake server.
-- Server (Testcontainers Postgres and Kafka): CRUD, validation, stale and concurrent writes, audit,
-  layer overlap, ETag/304, the SSE stream, dedup of retried events, first-exposure attribution,
-  orphan conversions.
-- `TwoProportionZTest` against known values; `SequentialTest` against simulated peeking A/A tests.
+- **Evaluator:** rule order, targeting, weights, ramp stability, a 1,000,000-user distribution
+  test (50/50 holds within 0.5%), and layer exclusivity across 100,000 users.
+- **SDK:** ETag polling, kill switch propagation, server outages, offline restarts from disk,
+  buffer overflow, SSE push and reconnects. These tests run against an in-process fake server.
+- **Server:** CRUD, validation, concurrent writes, audit, layer overlap, ETag/304, the SSE stream,
+  event deduplication and attribution. These run against real Postgres and Kafka.
+- **Statistics:** the z-test against known values, and the sequential test against simulated
+  A/A experiments that are checked repeatedly.
 
-## Numbers
+## Performance
 
-From [docs/BENCHMARKS.md](docs/BENCHMARKS.md), measured on one laptop:
+Measured on a single laptop; methodology and raw output are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
-| What | Result |
+| Measurement | Result |
 |---|---|
 | SDK `getVariant` (JMH) | 233 ns average, 0.8 µs p99 |
-| Config polling (k6, 50 VUs) | 23,650 req/s, p95 4.5 ms, 0 errors |
+| Config polling (k6, 50 virtual users) | 23,650 req/s, p95 4.5 ms, 0 errors |
 | Event ingest (k6, 500-event batches) | 55,800 events/s, 0 errors |
-| Aggregation (one consumer) | 9,250 events/s |
+| Aggregation (single consumer) | 9,250 events/s |
 
-## What's next
+## Roadmap
 
-Per-user auth for the admin API and console in place of a shared key; multiple metrics per
-experiment; CUPED variance reduction; pushing changes between server instances (Postgres
-`LISTEN/NOTIFY`) so streams on every instance fire at once, not on the next cache expiry.
+- Per-user authentication for the admin API and console, replacing the shared key
+- Multiple metrics per experiment
+- CUPED variance reduction
+- Change notifications between server instances (Postgres `LISTEN/NOTIFY`), so streams on every
+  instance fire at once
